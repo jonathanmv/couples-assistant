@@ -6,10 +6,23 @@ import { openai } from "@ai-sdk/openai";
 import { createStreamableUI } from "ai/rsc";
 import { ReactNode } from "react";
 import { z } from "zod";
-import * as todoApi from "@/app/actions-todo";
-import { TodoListPreview } from "@/components/todo-list-preview";
+import { buildTodoTools } from "@/app/todos/todo-tools";
 
 type StreamableUIWrapper = ReturnType<typeof createStreamableUI>;
+
+const getNoToolFoundTool = (stream: StreamableUIWrapper) => ({
+  noToolFound: {
+    description:
+      "Use this tool when you can't help the user with the task you were asked to do.",
+    parameters: z.object({
+      message: z.string().describe("The message to display."),
+    }),
+    execute: async ({ message }: { message: string }) => {
+      stream.done();
+      return message;
+    },
+  },
+});
 
 const getWeatherTool = (stream: StreamableUIWrapper) => ({
   showWeather: {
@@ -21,80 +34,6 @@ const getWeatherTool = (stream: StreamableUIWrapper) => ({
     execute: async ({ city, unit }: Parameters<typeof Weather>[0]) => {
       stream.done(<Weather city={city} unit={unit} />);
       return `Here's the weather for ${city}!`;
-    },
-  },
-});
-
-const getTodosTool = (stream: StreamableUIWrapper) => ({
-  showTodos: {
-    description: "Show the list of todos.",
-    parameters: z.object({}),
-    execute: async () => {
-      const todos = await todoApi.getTodos();
-      stream.done(<TodoListPreview todos={todos} />);
-      return "Here are your todos:";
-    },
-  },
-});
-
-const getAddTodoTool = (stream: StreamableUIWrapper) => ({
-  addTodo: {
-    description: "Add a new todo.",
-    parameters: z.object({
-      text: z.string().describe("The text of the todo."),
-      author: z.string().describe("The author of the todo."),
-      label: z.string().optional().describe("The label of the todo."),
-    }),
-    execute: async ({
-      text,
-      author,
-      label,
-    }: Parameters<typeof todoApi.addTodo>[0]) => {
-      const newTodo = await todoApi.addTodo({
-        text,
-        author,
-        label,
-        completed: false,
-      });
-      stream.done(<TodoListPreview todos={[newTodo]} />);
-      return "TODO added!";
-    },
-  },
-});
-
-const getCompleteTodoTool = (stream: StreamableUIWrapper) => ({
-  completeTodo: {
-    description: "Complete a todo.",
-    parameters: z.object({ text: z.string().describe("The text of the todo") }),
-    execute: async ({ text }: { text: string }) => {
-      let todo = await todoApi.findTodoByText(text);
-      if (!todo) {
-        return "I couldn't find a todo similar to " + text;
-      }
-
-      todo = await todoApi.updateTodo({
-        ...todo,
-        completed: true,
-      });
-      stream.done(<TodoListPreview todos={[todo]} />);
-      return "TODO completed!";
-    },
-  },
-});
-
-const getRemoveCompletedTodosTool = (stream: StreamableUIWrapper) => ({
-  removeCompletedTodos: {
-    description: "Remove all completed todos.",
-    parameters: z.object({}),
-    execute: async () => {
-      const todos = await todoApi.getTodos();
-      const completedTodos = todos.filter((todo) => todo.completed);
-      await Promise.all(
-        completedTodos.map((todo) => todoApi.deleteTodo(todo.id))
-      );
-      const leftTodos = await todoApi.getTodos();
-      stream.done(<TodoListPreview todos={leftTodos} />);
-      return "Completed todos removed! Here are the remaining todos:";
     },
   },
 });
@@ -114,11 +53,8 @@ export async function continueConversation(history: Message[]) {
     messages: history,
     tools: {
       ...getWeatherTool(stream),
-      // TODO tools
-      ...getTodosTool(stream),
-      ...getAddTodoTool(stream),
-      ...getCompleteTodoTool(stream),
-      ...getRemoveCompletedTodosTool(stream),
+      ...buildTodoTools(stream),
+      ...getNoToolFoundTool(stream),
     },
   });
 
